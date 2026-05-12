@@ -51,7 +51,8 @@ const char GPRS_PASS[]  = "vivo";
 
 // Definições GSM ****************************************************************************
 #define BAUD_RATE           115200      // Velocidade comunicação UART AT
-#define STAB_TIME_GSM       8000        // Tempo de estabilização após hardware boot modem
+#define STAB_TIME_GSM       8000        // Tempo de estabilização após hardware boot modem (ms)
+#define ENERGY_STAB_GSM     2000        // Tempo de estabilização de energia GSM (ms)
 #define PULSE_TIME_PWRKEY   1500        // Tempo do pulso para hardware boot modem
 #define SYNC_ATTEMPTS       10          // Tentativas de sincronia de Baud Rate UART
 
@@ -183,9 +184,9 @@ void pwrKeyPulse()
 bool initModem()
 {
   // Tempo de estabilização de energia GSM
-  intDelay(2000);
+  intDelay(ENERGY_STAB_GSM);
 
-  Serial.println("[GSM] " + modem.getModemInfo());
+  Serial.println("[GSM] Init..");
 
   // 1. Tenta realizar comunicação com Modem
   if (!sendATAndCheck("", "OK", 1000)) {
