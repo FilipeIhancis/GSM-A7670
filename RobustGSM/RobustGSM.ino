@@ -40,15 +40,14 @@ const char GPRS_PASS[]  = "vivo";
 #define MQTT_TOPIC            "ihancis/testeGSM"      // Tópico para publicações MQTT
 #define DEVICE_ID             "ihancis"               // ID Base do dispositivo para conexão MQTT
 #define KEEP_ALIVE_MQTT       50                      // Keep Alive MQTT
+#define SOCKET_TIMEOUT_MQTT   30                      // Timeou   50                      // Keep Alive MQTT
 #define SOCKET_TIMEOUT_MQTT   30                      // Timeout MQTT
 
 // Pinagem GSM ******************************************************************************
-#define MODEM_TX      17                // pino tx do esp = 17, vai no RX do mod
-#define MODEM_RX      16              
-#define MODEM_PWRKEY  4                 // Pino Power Key
-#define MODEM_SLEEP   18                 // Pino Sleep
-#define DTR_SET_SLEEP 0                 // SETAR SLEEP MODEM VIA DTR PIN
-#define DTR_SET_WAKE  1                 // SETAR WAKE MODEM VIA DTR PIN
+#define MODEM_TX      17                // pino de transmissão UART ESP32 (vai no RX GSM)
+#define MODEM_RX      16                // Pino de recepção UART ESP32 (vai no TX GSM)
+#define MODEM_PWRKEY  4                 // Pino Power Down (PWRKEY)
+#define MODEM_SLEEP   18                // Pino Sleep / DTR A7670
 
 // Variáveis de Controle de Falha ***************************************************************
 uint8_t uartFailCount   = 0;            // Indica erros de comunicação UART (Comandos AT)
@@ -58,6 +57,7 @@ int mqttFailCount       = 0;            // Indica quantidade de falhas de MQTT
 // Definições GSM ****************************************************************************
 #define BAUD_RATE           115200      // Velocidade comunicação UART AT
 #define STAB_TIME_GSM       8000        // Tempo de estabilização após hardware boot modem (ms)
+#define CFUN_STAB_TIME      5000        // Tempo de estabilização após modo de funcionalidade
 #define ENERGY_STAB_GSM     2000        // Tempo de estabilização de energia GSM (ms)
 #define PULSE_TIME_PWRKEY   1500        // Tempo do pulso para hardware boot modem
 #define SYNC_ATTEMPTS       10          // Tentativas de sincronia de Baud Rate UART
@@ -66,7 +66,8 @@ int mqttFailCount       = 0;            // Indica quantidade de falhas de MQTT
 #define MAX_UART_FAILS      3           // Máximo de falhas da UART antes de pulso no GSM
 #define MAX_STACK_FAILS     3           // Máximo de falhas de Registro de Rede LTE
 #define MAX_DNS_FAIL        3           // Máximo de falhas DNS permitidas
-
+#define DTR_SET_SLEEP       0           // Setar Sleep Mode DTR
+#define DTR_SET_WAKE        1           // Setar Wake DTR
 
 // Instâncias **********************************************************************************
 TinyGsm modem(SerialAT);                // Obj. modem, que utiliza SerialAT para com. UART
@@ -184,15 +185,17 @@ bool modemConnect()
 /*********************************************************************************************************************/
 bool checkUART()
 {
+  Serial.print("[GSM] UART: ");
   // Teste simples de eco (verificar se está respondendo aos ATs)
   if (sendATAndCheck("", "OK", UART_CHECK_TIMEOUT)) {
+    Serial.println("OK");
     uartFailCount = 0;
     return true;
   }
 
   // Considera-se que UART falhou dentro do timeout
   uartFailCount++;
-  Serial.printf("[UART] Timeout %d/%d: Tentando sincronia.\n", uartFailCount, MAX_UART_FAILS);
+  Serial.printf("Timeout (%d/%d). Tentando sincronia.\n", uartFailCount, MAX_UART_FAILS);
   
   // Tenta sincronizar enviando AT repetidamente
   for (int i = 0; i < 3; i++)
@@ -201,7 +204,7 @@ bool checkUART()
     intDelay(100);              // Processamento do enter
     
     if (sendATAndCheck("", "OK", UART_CHECK_TIMEOUT)) {
-      Serial.println("[UART] Sincronizado.");
+      Serial.println("[GSM] UART Sincronizado.");
       uartFailCount = 0;
       return true;
     }
@@ -315,85 +318,15 @@ bool hardReset()
 }
 
 /*********************************************************************************************************************/
-bool validateFullStack()
-{
-  // 0. Verifica UART & Hardware (mais crítico)
-  if(!checkUART()) return false;
-
-  // 1. Verifica Registro na Rede LTE
-  if (!modem.isNetworkConnected())
-  {
-    Serial.println("[STACK] LTE Offline. Aguardando torre...");
-
-    // Recovery: tenta reconectar
-    if(!modem.waitForNetwork(15000L))
-    {
-      stackFailCount++;
-      if(stackFailCount >= MAX_STACK_FAILS) {
-        // Caso não consiga reconectar, reinicia o rádio
-        Serial.println("[RECOVERY] Resetando rádio (CFUN 0->1)");
-        sendATAndCheck("+CFUN=0", "OK", 5000);
-        intDelay(2000);
-        sendATAndCheck("+CFUN=1", "OK", 5000);
-        stackFailCount = 0;
-      }
-      return false;
-    }
-  }
-
-  // Checa IP e PDP (Camada de dados)
-  if(!checkIP()) {
-    Serial.print("[STACK] Conectando GPRS novamente: ");
-    if(!modem.gprsConnect(APN, GPRS_USER, GPRS_PASS)) {
-      Serial.println("Falha");
-      return false;
-    }
-    Serial.println("Conectado");
-  }
-
-  // Teste de Navegação Real (DNS)
-  static uint8_t dnsError = 0;
-  if (!sendATAndCheck("+CDNSGIP=\"google.com\"", "+CDNSGIP: 1", 4000))
-  {
-    dnsError++;
-    Serial.printf("[STACK] DNS Warning %d\n", dnsError);
-
-    // Reseta a interface NET caso erro seja persistente
-    if (dnsError >= MAX_DNS_FAIL) 
-    {
-      Serial.println("[RECOVERY] DNS persistente falhou.");
-      Serial.print("[RECOVERY] Resetando interface NET: ");
-      sendATAndCheck("+NETCLOSE", "OK", 3000);
-      intDelay(1000);
-      sendATAndCheck("+NETOPEN", "OK", 5000);
-      if(modem.gprsConnect(APN, GPRS_USER, GPRS_PASS)) {
-        Serial.println("Reconectado.");
-      } else {
-        Serial.println("Falha");
-      }
-      dnsError = 0;
-      return false;
-    }
-  } else {
-    dnsError = 0;
-  }
-
-  stackFailCount = 0; 
-  return true;
-}
-
-/*********************************************************************************************************************/
 void pwrKeyPulse()
 {
-  Serial.println("[GSM] Pulso de Reset de Hardware (PWRKEY)");
+  Serial.println("[GSM] Pulso de RST de Hardware (PWRKEY)");
 
-  digitalWrite(MODEM_PWRKEY, HIGH); // Garante que comece em HIGH (assumindo lógica Active-Low)
+  digitalWrite(MODEM_PWRKEY, HIGH);   // Garante que comece em HIGH (assumindo lógica Active-Low)
   intDelay(500);
   digitalWrite(MODEM_PWRKEY, LOW);
-  intDelay(PULSE_TIME_PWRKEY);      // Pulso para ligar: Puxa para LOW por 1.5 segundos
-
-  // Retorna para HIGH e aguarda a estabilização do sistema
-  digitalWrite(MODEM_PWRKEY, HIGH);
+  intDelay(PULSE_TIME_PWRKEY);        // Pulso para ligar: Puxa para LOW por 1.5 segundos
+  digitalWrite(MODEM_PWRKEY, HIGH);   // Retorna para HIGH e aguarda a estabilização do sistema
 
   Serial.println("[GSM] Pulse finished. Waiting for boot...");
 
@@ -404,26 +337,23 @@ void pwrKeyPulse()
 /*********************************************************************************************************************/
 bool initModem()
 {
-  // Limpa Serial AT
-  flushModemUART();
+  flushModemUART();             // Limpa Serial AT
+  intDelay(ENERGY_STAB_GSM);    // Tempo de estabilização de energia GSM
 
-  // Tempo de estabilização de energia GSM
-  intDelay(ENERGY_STAB_GSM);
+  // 1. Checa comunicação UART (Serial AT) entre ESP32 e GSM
 
-  Serial.println("[GSM] Inicializando detecção UART");
   Serial.print("[GSM] UART: ");
-
-  // 1. Tenta realizar comunicação com Modem
   bool synced = false;
   for(int i = 0; i < SYNC_ATTEMPTS; i++) {
     if (sendATAndCheck("", "OK", 1000)) {
-      Serial.println("Responding (synced)");
+      Serial.printf("Responding (%d/%d)\n", i, SYNC_ATTEMPTS);
       synced = true;
       break;
     }
     intDelay(200);
   }
-
+  // Caso não consiga sincronizar UART, reinicializa o GSM forçadamente
+  // Pulso PWRKEY força reset do hardware do módulo. Caso esteja travado em algum processo, retoma
   if(!synced) 
   {
     Serial.println("Sem resposta. Triggering hardware boot");
@@ -439,7 +369,7 @@ bool initModem()
       intDelay(200);
     }
   }
-  
+  // Caso não consiga sincronizar a UART, modem não foi inicializado corretamente
   if (!synced) {
     Serial.println("ERRO UART");
     return false;
@@ -447,34 +377,31 @@ bool initModem()
 
   // Configuração do comportamento GSM:
   //sendATAndCheck("+IPR=115200", "OK", 1000);  // Força BAUD RATE
-  sendATAndCheck("E0", "OK", 2000);           // Defino echo = off
-  sendATAndCheck("+CMEE=2", "OK", 2000);      // Define erros detalhados
-  sendATAndCheck("+CNMP=38", "OK", 2000);     // Define LTE only
-  intDelay(10);
+  sendATAndCheck("E0", "OK", 2000);             // Defino echo = off
+  sendATAndCheck("+CMEE=2", "OK", 2000);        // Define erros detalhados
+  sendATAndCheck("+CNMP=38", "OK", 2000);       // Define LTE only
+  intDelay(5);
   
-  // Configurações de recuperação
+  // Configurações de recuperação (caso entre em modo de proteção)
   if(!sendATAndCheck("+CSCLK=0", "OK", 1000)) {
-    Serial.println("[GSM] ERROR CSCLK=0");
+    Serial.println("[GSM] ERROR CSCLK = 0");          // Desativa controle de sleep da UART
   }
   if(!sendATAndCheck("+CEDRXS=0", "OK", 1000)) {
-    Serial.println("[GSM] ERROR CEDRXS=0");// Mata o ciclo de 8 segundos
+    Serial.println("[GSM] ERROR CEDRXS = 0");         // Mata o ciclo de 8 segundos de blink Netlight
   }
   if(!sendATAndCheck("+CPSMS=0", "OK", 1000)) {
-    Serial.println("[GSM] ERROR CPSMS=0");  // Desativa o Power Saving Mode (PSM) se estiver ativo
+    Serial.println("[GSM] ERROR CPSMS = 0");          // Desativa o Power Saving Mode (PSM) se estiver ativo
   }
 
-  // Define modo de funcionalidade máxima
-  //if (!sendATAndCheck("+CFUN=1,1", "OK", 10000)) {
+  // Define modo de funcionalidade máxima.
   if (!sendATAndCheck("+CFUN=1", "OK", 10000)) {
     Serial.println("[GSM] Erro crítico: rádio não está configurado");
     return false;
   }
-
-  intDelay(5000);
+  intDelay(CFUN_STAB_TIME);   // Tempo de estabilização (boot time) ao mudar funcionalidade (CFUN)
 
   // Desabilita URCs de fuso horário que podem sujar a UART do ESP32
   sendATAndCheck("+CTZR=0", "OK", 2000);
-  intDelay(5);
   sendATAndCheck("+CTZU=1", "OK", 2000);
 
   if(!checkSIM()) {
@@ -483,9 +410,9 @@ bool initModem()
   }
 
   intDelay(10);
-  modemDiag();
+  //modemDiag();
 
-  return true;
+  return true;    // Modem inicializado corretamente
 
   /*
   // Afere a qualidade do sinal
@@ -505,7 +432,7 @@ bool sleepModem()
   Serial.print("[GSM] Entrando em Sleep (DTR High): ");
 
   if(!sendATAndCheck("+CSCLK=1", "OK", 2000)) {
-    Serial.println(" CSCLK=1 ERROR.");
+    Serial.println(" Não foi possível colocar em modo de baixo consumo (CSCLK error)");
     return false;
   }
 
@@ -513,7 +440,7 @@ bool sleepModem()
   digitalWrite(MODEM_SLEEP, DTR_SET_SLEEP);
   intDelay(100);
 
-  Serial.println(" Modem em modo de baixo consumo.");
+  Serial.print(" Modem em modo de baixo consumo - ");
   Serial.println(ATResponse("+CSCLK?"));
   return true;
 }
@@ -521,27 +448,25 @@ bool sleepModem()
 /*********************************************************************************************************************/
 bool wakeModem()
 {
-  Serial.println("[GSM] Acordando modem (WAKE)");
+  Serial.print("[GSM] Acordando modem (wake): ");
 
   // 1. Puxa DTR para acordar a interface serial
   digitalWrite(MODEM_SLEEP, DTR_SET_WAKE);
-
   intDelay(500);
   flushModemUART();
 
-  if(checkUART())
-  {
-    Serial.println("[GSM] Modem acordado. Pronto para reconectar.");
+  // Verifica se responde comandos AT corretamente
+  if(checkUART()) {
+    Serial.println("OK. Pronto para reconectar.");
     return true;
   } else {
-    Serial.println("[GSM] Erro ao acordar");
+    Serial.println("ERRO ao acordar");
     return false;
   }
 }
 
 /*********************************************************************************************************************/
 void mqttConfig() {
-  // Configurações base MQTT
   mqtt.setServer(MQTT_SERVER, MQTT_PORT);       // Seta Servidor e porta do Broker
   mqtt.setBufferSize(TINY_GSM_RX_BUFFER);       // Define buffer MQTT (importante analisar)
   mqtt.setKeepAlive(KEEP_ALIVE_MQTT);           // Configura keepAlive do socket
@@ -574,27 +499,6 @@ bool mqttConnect()
     mqtt.disconnect();
     return false;
   }
-  return true;
-}
-
-/*********************************************************************************************************************/
-bool publish()
-{
-  if(!mqtt.connected()) {
-    Serial.println("\n[APP] Publicação abortada (MQTT Offline)");
-    return false;
-  }
-  Serial.println("\n[APP] Enviando: Hello World");
-  String msg = crypto.encryptString("Hello World");
-
-  if(!mqtt.publish(MQTT_TOPIC, msg.c_str()) ) {
-    Serial.println("[APP] Falha no envio\n");
-    mqttFailCount++;
-    stackFailCount++;
-    return false;
-  }
-  Serial.println("[APP] Dados publicados.\n");
-  mqttFailCount = 0;
   return true;
 }
 
@@ -655,6 +559,27 @@ void connManagement()
 }
 
 /*********************************************************************************************************************/
+bool publish()
+{
+  if(!mqtt.connected()) {
+    Serial.println("\n[APP] Publicação abortada (MQTT Offline)");
+    return false;
+  }
+  Serial.println("\n[APP] Enviando: Hello World");
+  String msg = crypto.encryptString("Hello World");
+
+  if(!mqtt.publish(MQTT_TOPIC, msg.c_str()) ) {
+    Serial.println("[APP] Falha no envio\n");
+    mqttFailCount++;
+    stackFailCount++;
+    return false;
+  }
+  Serial.println("[APP] Dados publicados.\n");
+  mqttFailCount = 0;
+  return true;
+}
+
+/*********************************************************************************************************************/
 void setup()
 {
   // Inicializa Serial
@@ -707,8 +632,7 @@ void loop()
   {
     if(wakeModem()) 
     {
-      modemDiag();
-      intDelay(100);
+      //modemDiag();
 
       if(!modem.isNetworkConnected() || !modem.isGprsConnected()) {
         modemConnect();
@@ -721,6 +645,6 @@ void loop()
         mqtt.disconnect();
       }
     }
-    sleepModem(); // volta a dormir
+    sleepModem();   // volta a dormir
   }
 }
