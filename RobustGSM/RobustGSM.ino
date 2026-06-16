@@ -13,7 +13,7 @@
 #include "ESPEncrypt.h"
 
 // Timers ******************************************************************************
-Neotimer publishTimer   = Neotimer(60000);        // Timer para publicações MQTT (15 seg)
+Neotimer publishTimer   = Neotimer(20000);        // Timer para publicações MQTT (15 seg)
 Neotimer checkConnTimer = Neotimer(20000);        // Timer para checar com. MQTT/GPRS
 
 // Modem GSM ****************************************************************************
@@ -41,13 +41,15 @@ const char GPRS_PASS[]  = "vivo";
 #define MQTT_TOPIC            "ihancis/testeGSM"      // Tópico para publicações MQTT
 #define DEVICE_ID             "ihancis"               // ID Base do dispositivo para conexão MQTT
 #define KEEP_ALIVE_MQTT       50                      // Keep Alive MQTT
-#define SOCKET_TIMEOUT_MQTT   30                      // Timeou   50
+#define SOCKET_TIMEOUT_MQTT   30                      // Timeot MQTT
 
 // Pinagem GSM ******************************************************************************
 #define MODEM_TX      17                // pino de transmissão UART ESP32 (vai no RX GSM)
 #define MODEM_RX      16                // Pino de recepção UART ESP32 (vai no TX GSM)
-#define MODEM_PWRKEY  4                 // Pino Power Down (PWRKEY)
-#define MODEM_SLEEP   18                // Pino Sleep / DTR A7670
+//#define MODEM_PWRKEY  4                 // Pino Power Down (PWRKEY)
+#define MODEM_PWRKEY  22                 // Pino Power Down (PWRKEY)
+//#define MODEM_SLEEP   18                // Pino Sleep / DTR A7670
+#define MODEM_SLEEP   5                // Pino Sleep / DTR A7670
 
 // Variáveis de Controle de Falha ***************************************************************
 uint8_t uartFailCount   = 0;            // Indica erros de comunicação UART (Comandos AT)
@@ -301,8 +303,7 @@ void pwrKeyPulse()
 
   Serial.println("OK");
 
-  // Tempo de boot
-  intDelay(STAB_TIME_GSM);
+  intDelay(STAB_TIME_GSM);  // Tempo de boot
 }
 
 /*********************************************************************************************************************/
@@ -430,7 +431,7 @@ bool sleepModem(bool disableRF = false)
 /*********************************************************************************************************************/
 bool wakeModem(bool wakeRF = false)
 {
-  Serial.print("[GSM] Acordando modem (wake): ");
+  Serial.println("[GSM] Acordando modem (wake)");
 
   // 1. Puxa DTR para acordar a interface serial
   digitalWrite(MODEM_SLEEP, DTR_SET_WAKE);
@@ -450,14 +451,7 @@ bool wakeModem(bool wakeRF = false)
     initModem();
   }
 
-  // Verifica se responde comandos AT corretamente
-  if(checkUART()) {
-    Serial.println("OK");
-    return true;
-  } else {
-    Serial.println("UART ERROR");
-    return false;
-  }
+  return checkUART();
 }
 
 /*********************************************************************************************************************/
@@ -557,7 +551,12 @@ void connManagement()
 bool publish()
 {
   if(!checkIP()) {
-    Serial.println("[GSM] IP Inválido: abordando publicação");
+    Serial.println("[GSM] IP Inválido: abordando publicação.");
+    return false;
+  }
+
+  if(!checkSignal()) {
+    Serial.println("[GSM] Stack inválida: abortando publicação.");
     return false;
   }
 
@@ -565,10 +564,20 @@ bool publish()
     Serial.println("\n[APP] Publicação abortada (MQTT Offline)");
     return false;
   }
-  Serial.println("\n[APP] Enviando: Hello World");
-  String msg = crypto.encryptString("Hello World");
 
-  intDelay(100);
+  if(!mqtt.loop()) {
+    Serial.println("\n[APP] Dead socket: publicação abortada");
+    return false;
+  }
+
+  // Dado json que será encaminhado ao Broker MQTT
+  String json = "{\"id\":\"E01\",\"sens\":{\"temp_C\":23.5,\"umidade_perc\":62}}";
+
+  Serial.print("\n[APP] Enviando: ");
+  Serial.println(json);
+  String msg = crypto.encryptString(json);
+
+  intDelay(10);
 
   // pub. mqtt
   if(!mqtt.publish(MQTT_TOPIC, msg.c_str()) ) {
