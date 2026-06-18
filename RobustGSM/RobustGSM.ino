@@ -13,15 +13,33 @@
 #include "ESPEncrypt.h"
 
 // Timers ******************************************************************************
-Neotimer publishTimer   = Neotimer(20000);        // Timer para publicações MQTT (15 seg)
-Neotimer checkConnTimer = Neotimer(20000);        // Timer para checar com. MQTT/GPRS
+Neotimer publishTimer   = Neotimer(20000);        // Timer para publicações MQTT (ms)
+Neotimer checkConnTimer = Neotimer(20000);        // Timer para checar com. MQTT/GPRS (ms) - NAO USAR
 
 // Modem GSM ****************************************************************************
-#define TINY_GSM_MODEM_A7670                // Modelo Modem GSM
 #define SIM_TIM                             // Definição do modelo do chip/SIM (TIM/VIVO)
 #define TINY_GSM_RX_BUFFER 1024             // Buffer interno GSM (uart, process etc)
+#define TINY_GSM_MODEM_A7670                // Modelo Modem GSM
 #include <TinyGsmClient.h>                  // Biblioteca base da RTOS GSM
 #define SerialAT  Serial1                   // Define Serial para comandos AT
+
+// Definições MQTT *************************************************************************
+#define MQTT_SERVER           "broker.hivemq.com"                     // Host Broker
+#define MQTT_PASSWORD         "password_aqui"                         // Senha do MQTT
+#define MQTT_PORT             1883                                    // Porta do Broker (1883 - porta padrão)
+#define MQTT_TOPIC            "ihancis/testeGSM"                      // Tópico para publicações MQTT
+#define DEVICE_ID             "ihancis"                               // ID Base do dispositivo para conexão MQTT
+#define AES_KEY               "7cc7f46dd4a82b10b23388c7eda6379b"      // Chave criptográfica AES 128 bits
+#define KEEP_ALIVE_MQTT       50                                      // Keep Alive MQTT
+#define SOCKET_TIMEOUT_MQTT   30                                      // Timeot MQTT
+
+// Pinagem GSM ******************************************************************************
+#define MODEM_TX      17                // pino de transmissão UART ESP32 (vai no RX GSM)
+#define MODEM_RX      16                // Pino de recepção UART ESP32 (vai no TX GSM)
+//#define MODEM_PWRKEY  4                 // Pino Power Down (PWRKEY)
+#define MODEM_PWRKEY  22                 // Pino Power Down (PWRKEY)
+//#define MODEM_SLEEP   18                // Pino Sleep / DTR A7670
+#define MODEM_SLEEP   5                // Pino Sleep / DTR A7670
 
 // Definições da Rede LTE ****************************************************************
 #ifdef SIM_TIM
@@ -34,22 +52,6 @@ const char APN[]        = "zap.vivo.com.br";
 const char GPRS_USER[]  = "vivo";
 const char GPRS_PASS[]  = "vivo";
 #endif
-
-// Definições MQTT *************************************************************************
-#define MQTT_SERVER           "broker.hivemq.com"     // Host Broker Público (pré DNS)
-#define MQTT_PORT             1883                    // Porta do Broker (1883 - porta padrão)
-#define MQTT_TOPIC            "ihancis/testeGSM"      // Tópico para publicações MQTT
-#define DEVICE_ID             "ihancis"               // ID Base do dispositivo para conexão MQTT
-#define KEEP_ALIVE_MQTT       50                      // Keep Alive MQTT
-#define SOCKET_TIMEOUT_MQTT   30                      // Timeot MQTT
-
-// Pinagem GSM ******************************************************************************
-#define MODEM_TX      17                // pino de transmissão UART ESP32 (vai no RX GSM)
-#define MODEM_RX      16                // Pino de recepção UART ESP32 (vai no TX GSM)
-//#define MODEM_PWRKEY  4                 // Pino Power Down (PWRKEY)
-#define MODEM_PWRKEY  22                 // Pino Power Down (PWRKEY)
-//#define MODEM_SLEEP   18                // Pino Sleep / DTR A7670
-#define MODEM_SLEEP   5                // Pino Sleep / DTR A7670
 
 // Variáveis de Controle de Falha ***************************************************************
 uint8_t uartFailCount   = 0;            // Indica erros de comunicação UART (Comandos AT)
@@ -72,13 +74,10 @@ int mqttFailCount       = 0;            // Indica quantidade de falhas de MQTT
 #define DTR_SET_WAKE        1           // Setar Wake DTR
 
 // Instâncias **********************************************************************************
-TinyGsm modem(SerialAT);                // Obj. modem, que utiliza SerialAT para com. UART
+TinyGsm       modem(SerialAT);          // Obj. modem, que utiliza SerialAT para com. UART
 TinyGsmClient gsmClient(modem);         // Cliente GSM para criar socket/conexão mqtt
-PubSubClient mqtt(gsmClient);           // Obj. para manipulação conexão MQTT
-
-// Definições de criptografia *****************************************************************
-#define AES_KEY "7cc7f46dd4a82b10b23388c7eda6379b"      // Chave criptográfica AES 128 bits
-ESPEncrypt crypto(AES_KEY);                             // Obj, que implementa AES-GCM-128bits
+PubSubClient  mqtt(gsmClient);          // Obj. para manipulação conexão MQTT
+ESPEncrypt    crypto(AES_KEY);          // Obj, que implementa AES-GCM-128bits
 
 
 
@@ -474,7 +473,7 @@ bool mqttConnect()
   String CLIENT_ID = String(DEVICE_ID) + "_" + String(random(0xffff), HEX);
 
   // Realiza conexão com o Broker MQTT
-  if (mqtt.connect(CLIENT_ID.c_str())) {
+  if (mqtt.connect( CLIENT_ID.c_str(), MQTT_SERVER, MQTT_PASSWORD) ) {
     Serial.println("Sucesso");
     return true;
   }
