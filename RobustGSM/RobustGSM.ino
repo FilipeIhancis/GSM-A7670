@@ -25,6 +25,7 @@ Neotimer checkConnTimer = Neotimer(20000);        // Timer para checar com. MQTT
 
 // Definições MQTT *************************************************************************
 #define MQTT_SERVER           "broker.hivemq.com"                     // Host Broker
+#define MQTT_USER             "user-aqui"                             // USER 
 #define MQTT_PASSWORD         "password_aqui"                         // Senha do MQTT
 #define MQTT_PORT             1883                                    // Porta do Broker (1883 - porta padrão)
 #define MQTT_TOPIC            "ihancis/testeGSM"                      // Tópico para publicações MQTT
@@ -458,7 +459,7 @@ void mqttConfig() {
   mqtt.setServer(MQTT_SERVER, MQTT_PORT);       // Seta Servidor e porta do Broker
   mqtt.setBufferSize(TINY_GSM_RX_BUFFER);       // Define buffer MQTT (importante analisar)
   mqtt.setKeepAlive(KEEP_ALIVE_MQTT);           // Configura keepAlive do socket
-  mqtt.setSocketTimeout(SOCKET_TIMEOUT_MQTT);   // Timeout de operações mqtt
+  mqtt.setSocketTimeout(SOCKET_TIMEOUT_MQTT);   // Timeout de operações mqtte
 }
 
 /*********************************************************************************************************************/
@@ -473,7 +474,7 @@ bool mqttConnect()
   String CLIENT_ID = String(DEVICE_ID) + "_" + String(random(0xffff), HEX);
 
   // Realiza conexão com o Broker MQTT
-  if (mqtt.connect( CLIENT_ID.c_str(), MQTT_SERVER, MQTT_PASSWORD) ) {
+  if (mqtt.connect( CLIENT_ID.c_str(), MQTT_USER, MQTT_PASSWORD) ) {
     Serial.println("Sucesso");
     return true;
   }
